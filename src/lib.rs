@@ -45,6 +45,34 @@ let value = builder.into_value(|| "A default value".to_owned());
 
 assert_eq!("A default value fluent1 fluent2", value);
 ```
+
+Fluent builders can also be used to thread required state through construction:
+
+```
+use fluent_builder::StatefulFluentBuilder;
+
+#[derive(Debug, PartialEq, Eq)]
+struct Builder {
+    required: String,
+    optional: Option<String>,
+}
+
+let builder = StatefulFluentBuilder::<Builder, String>::from_seed("A required value".to_owned())
+    .fluent_mut("A required value".to_owned(), |b, s| {
+        b.required = s;
+        if let Some(ref mut optional) = b.optional.as_mut() {
+            optional.push_str(" fluent1");
+        }
+    });
+
+let value = builder.into_value(|s| Builder {
+    required: s,
+    optional: Some("A default value".to_owned())
+});
+
+assert_eq!("A required value", value.required);
+assert_eq!("A default value fluent1", value.optional.unwrap());
+```
 */
 
 /**
