@@ -8,4 +8,7 @@ documentation = "https://docs.rs/fluent_builder/"
 repository = "https://github.com/KodrAus/fluent_builder"
 readme = "README.md"
 
+[badges]
+travis-ci = { repository = "KodrAus/fluent_builder" }
+
 [dependencies]

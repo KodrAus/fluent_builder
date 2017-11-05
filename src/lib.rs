@@ -4,6 +4,9 @@ A simple builder for constructing or mutating values.
 This crate provides a simple `FluentBuilder` structure.
 It offers some standard behaviour for constructing values from a given source, or by mutating a default that's supplied later.
 This crate is intended to be used within other builders rather than consumed by your users directly.
+It's especially useful for managing the complexity of keeping builders ergonomic when they're nested within other builders.
+
+This crate is currently designed around builders that take self by-value instead of by-reference.
 
 # Usage
 
@@ -73,6 +76,108 @@ let value = builder.into_value(|s| Builder {
 assert_eq!("A required value", value.required);
 assert_eq!("A default value fluent1", value.optional.unwrap());
 ```
+
+# Within other builders
+
+The `FluentBuilder` and `StatefulFluentBuilder` types are designed to be used within other builders rather than directly.
+They just provide some consistent underlying behaviour with respect to assigning and mutating inner builders:
+
+```rust
+use fluent_builder::FluentBuilder;
+
+#[derive(Default)]
+struct RequestBuilder {
+    // Use a `FluentBuilder` to manage the inner `BodyBuilder`
+    body: FluentBuilder<BodyBuilder>,
+}
+
+#[derive(Default)]
+struct BodyBuilder {
+    bytes: Vec<u8>,
+}
+
+impl<B> From<B> for BodyBuilder
+where
+    B: AsRef<[u8]>
+{
+    fn from(bytes: B) -> Self {
+        BodyBuilder {
+            bytes: bytes.as_ref().to_vec()
+        }
+    }
+}
+
+struct Request {
+    body: Body
+}
+
+struct Body(Vec<u8>);
+
+impl RequestBuilder {
+    fn new() -> Self {
+        RequestBuilder {
+            body: FluentBuilder::default(),
+        }
+    }
+
+    // Accept any type that can be converted into a `BodyBuilder`
+    // This will override any previously stored state or default
+    fn body<B>(mut self, body: B) -> Self
+    where
+        B: Into<BodyBuilder>
+    {
+        self.body = self.body.value(body.into());
+        self
+    }
+
+    // Mutate some `BodyBuilder` without having to name its type
+    // If there's no previously supplied concrete value then some
+    // default will be given on `build`
+    fn body_fluent<F>(mut self, body: F) -> Self
+    where
+        F: Fn(BodyBuilder) -> BodyBuilder + 'static
+    {
+        self.body = self.body.fluent(body);
+        self
+    }
+
+    fn build(self) -> Request {
+        // Get a `Body` by converting the `FluentBuilder` into a `BodyBuilder`
+        let body = self.body.into_value(|| BodyBuilder::default()).build();
+
+        Request {
+            body: body
+        }
+    }
+}
+
+impl BodyBuilder {
+    fn append(mut self, bytes: &[u8]) -> Self {
+        self.bytes.extend(bytes);
+        self
+    }
+
+    fn build(self) -> Body {
+        Body(self.bytes)
+    }
+}
+
+// Use a builder to construct a request using fluent methods
+let request1 = RequestBuilder::new()
+    .body_fluent(|b| b.append(b"some"))
+    .body_fluent(|b| b.append(b" bytes"))
+    .build();
+
+// Use a builder to construct a request using a given value
+let request2 = RequestBuilder::new()
+    .body(b"some bytes")
+    .build();
+
+assert_eq!(request1.body.0, request2.body.0);
+```
+
+This seems like a lot of boilerplate, but comes in handy when you have a lot of potentially nested builders and need to keep them consistent.
+There's nothing really special about the above builders besides the use of `FluentBuilder`.
 */
 
 /**
@@ -170,6 +275,8 @@ where
     - If there is no previous value, add the fluent method. This will be applied to a later-supplied default value.
     - If there is a previous value, add the fluent method and retain that previous value.
     - If there is a previous fluent method, stack this method on top and retain any previous value.
+
+    Each call to `fluent` will box the given closure.
     */
     pub fn fluent<F>(self, fluent_method: F) -> Self
     where
@@ -264,6 +371,8 @@ where
 {
     /**
     Create a new `StatefulFlientBuilder` from the given seed and fluent method.
+
+    The call to `from_fluent` will box the given closure.
     */
     pub fn from_fluent<F>(seed: S, fluent_method: F) -> Self
     where
@@ -297,6 +406,8 @@ where
     - If there is no previous value, add the fluent method. This will be applied to a later-supplied default value.
     - If there is a previous value, add the fluent method and retain that previous value.
     - If there is a previous fluent method, stack this method on top and retain any previous value.
+
+    Each call to `fluent` will box the given closure.
     */
     pub fn fluent<F>(self, seed: S, fluent_method: F) -> Self
     where
