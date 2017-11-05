@@ -304,7 +304,7 @@ where
 
 impl<T, S> StatefulFluentBuilder<T, S> {
     /**
-    Create a new `StatefulFlientBuilder` from the given value.
+    Create a new `StatefulFluentBuilder` from the given value.
     */
     pub fn from_value(value: T) -> Self {
         StatefulFluentBuilder {
@@ -313,7 +313,7 @@ impl<T, S> StatefulFluentBuilder<T, S> {
     }
 
     /**
-    Create a new `StatefulFlientBuilder` from the given seed.
+    Create a new `StatefulFluentBuilder` from the given seed.
     */
     pub fn from_seed(seed: S) -> Self {
         StatefulFluentBuilder {
@@ -370,7 +370,7 @@ where
     S: 'static,
 {
     /**
-    Create a new `StatefulFlientBuilder` from the given seed and fluent method.
+    Create a new `StatefulFluentBuilder` from the given seed and fluent method.
 
     The call to `from_fluent` will box the given closure.
     */
@@ -384,7 +384,7 @@ where
     }
 
     /**
-    Create a new `StatefulFlientBuilder` from the given seed and fluent method.
+    Create a new `StatefulFluentBuilder` from the given seed and fluent method.
 
     This method is the same as `from_fluent`, but mutates the value instead of replacing it.
     */
