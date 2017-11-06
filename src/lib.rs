@@ -15,9 +15,8 @@ Create a `FluentBuilder` and construct a default value:
 ```
 use fluent_builder::FluentBuilder;
 
-let builder = FluentBuilder::<String>::default();
-
-let value = builder.into_value(|| "A default value".to_owned());
+let value = FluentBuilder::<String>::default()
+    .into_value(|| "A default value".to_owned());
 
 assert_eq!("A default value", value);
 ```
@@ -26,28 +25,46 @@ Values can be supplied to the builder directly.
 In this case that value will be used instead of constructing the default:
 
 ```
-use fluent_builder::FluentBuilder;
-
-let builder = FluentBuilder::<String>::default().value("A value".to_owned());
-
-let value = builder.into_value(|| "A default value".to_owned());
+# use fluent_builder::FluentBuilder;
+let value = FluentBuilder::<String>::default()
+    .value("A value".to_owned())
+    .into_value(|| "A default value".to_owned());
 
 assert_eq!("A value", value);
 ```
 
-Mutating methods can be stacked and will either be applied to a concrete value, or the constructed default:
+Mutating methods will either be applied to a concrete value, or the constructed default:
 
 ```
-use fluent_builder::FluentBuilder;
+# use fluent_builder::FluentBuilder;
+let value = FluentBuilder::<String>::default()
+    .fluent_mut(|s| s.push_str(" fluent2"))
+    .into_value(|| "A default value".to_owned());
 
-let builder = FluentBuilder::<String>::default()
+assert_eq!("A default value fluent2", value);
+```
+
+## Stacking fluent methods
+
+Fluent methods are overriden by default each time `.fluent` is called, but can be configured to maintain state across calls using a generic parameter:
+
+```
+use fluent_builder::{FluentBuilder, Stack};
+
+let value = FluentBuilder::<String, Stack>::default()
     .fluent_mut(|s| s.push_str(" fluent1"))
-    .fluent_mut(|s| s.push_str(" fluent2"));
-
-let value = builder.into_value(|| "A default value".to_owned());
+    .fluent_mut(|s| s.push_str(" fluent2"))
+    .into_value(|| "A default value".to_owned());
 
 assert_eq!("A default value fluent1 fluent2", value);
 ```
+
+Which option is best depends on the use-case.
+For collection-like values it might make more sense to use stacking builders.
+For other kinds of values it probably makes more sense to use overriding builders, so they're the default choice.
+Using a generic parameter instead of some value to control whether or not fluent methods are stacked means you can enforce a particular style through Rust's type system.
+
+## Stateful builders
 
 Fluent builders can also be used to thread required state through construction:
 
@@ -60,35 +77,66 @@ struct Builder {
     optional: Option<String>,
 }
 
-let builder = StatefulFluentBuilder::<Builder, String>::from_seed("A required value".to_owned())
-    .fluent_mut("A required value".to_owned(), |b, s| {
-        b.required = s;
+let value = StatefulFluentBuilder::<Builder, String>::from_seed("A required value".to_owned())
+    .fluent_mut("A required value".to_owned(), |b| {
         if let Some(ref mut optional) = b.optional.as_mut() {
             optional.push_str(" fluent1");
         }
+    })
+    .into_value(|s| Builder {
+        required: s,
+        optional: Some("A default value".to_owned())
     });
-
-let value = builder.into_value(|s| Builder {
-    required: s,
-    optional: Some("A default value".to_owned())
-});
 
 assert_eq!("A required value", value.required);
 assert_eq!("A default value fluent1", value.optional.unwrap());
 ```
 
-# Within other builders
+Stateful builders can also stack fluent methods instead of overriding them.
+The API requires each invocation of `fluent` deals with the required state:
+
+```
+# #[derive(Debug, PartialEq, Eq)]
+# struct Builder {
+#     required: String,
+#     optional: Option<String>,
+# }
+use fluent_builder::{StatefulFluentBuilder, Stack};
+
+let value = StatefulFluentBuilder::<Builder, String, Stack>::from_seed("A required value".to_owned())
+    .fluent_mut("A required value".to_owned(), |b, s| {
+        b.required = s;
+        if let Some(ref mut optional) = b.optional.as_mut() {
+            optional.push_str(" fluent1");
+        }
+    })
+    .fluent_mut("A required value".to_owned(), |b, s| {
+        b.required = s;
+        if let Some(ref mut optional) = b.optional.as_mut() {
+            optional.push_str(" fluent2");
+        }
+    })
+    .into_value(|s| Builder {
+        required: s,
+        optional: Some("A default value".to_owned())
+    });
+
+assert_eq!("A required value", value.required);
+assert_eq!("A default value fluent1 fluent2", value.optional.unwrap());
+```
+
+## Within other builders
 
 The `FluentBuilder` and `StatefulFluentBuilder` types are designed to be used within other builders rather than directly.
 They just provide some consistent underlying behaviour with respect to assigning and mutating inner builders:
 
 ```rust
-use fluent_builder::FluentBuilder;
+use fluent_builder::{FluentBuilder, Stack};
 
 #[derive(Default)]
 struct RequestBuilder {
     // Use a `FluentBuilder` to manage the inner `BodyBuilder`
-    body: FluentBuilder<BodyBuilder>,
+    body: FluentBuilder<BodyBuilder, Stack>,
 }
 
 #[derive(Default)]
@@ -180,20 +228,33 @@ This seems like a lot of boilerplate, but comes in handy when you have a lot of 
 There's nothing really special about the above builders besides the use of `FluentBuilder`.
 */
 
+use std::marker::PhantomData;
+
+/**
+Indicate that fluent methods should be stacked on top of eachother.
+*/
+pub enum Stack {}
+
+/**
+Indicate that fluent methods should override eachother.
+*/
+pub enum Override {}
+
 /**
 A structure that can contain a value, or stack mutating methods over one supplied later.
 
 The `FluentBuilder<T>` is effectively a `StatefulFluentBuilder<T, ()>`.
 */
-pub struct FluentBuilder<T> {
-    inner: StatefulFluentBuilder<T, ()>,
+pub struct FluentBuilder<T, B = Override> {
+    inner: StatefulFluentBuilder<T, (), B>,
 }
 
 /**
 A stateful structure that can contain a value, or stack mutating methods over one supplied later. 
 */
-pub struct StatefulFluentBuilder<T, S> {
+pub struct StatefulFluentBuilder<T, S, B = Override> {
     inner: StatefulFluentBuilderInner<T, S>,
+    _marker: PhantomData<B>,
 }
 
 struct StatefulFluentBuilderInner<T, S>(State<T, S>, Option<Box<FnBox<T, T>>>);
@@ -216,7 +277,7 @@ where
     }
 }
 
-impl<T> Default for FluentBuilder<T> {
+impl<T, B> Default for FluentBuilder<T, B> {
     fn default() -> Self {
         FluentBuilder {
             inner: StatefulFluentBuilder::from_seed(())
@@ -224,7 +285,7 @@ impl<T> Default for FluentBuilder<T> {
     }
 }
 
-impl<T> FluentBuilder<T> {
+impl<T, B> FluentBuilder<T, B> {
     /**
     Create a default `FluentBuilder`.
     */
@@ -263,7 +324,7 @@ impl<T> FluentBuilder<T> {
     }
 }
 
-impl<T> FluentBuilder<T>
+impl<T> FluentBuilder<T, Stack>
 where
     T: 'static,
 {
@@ -302,23 +363,65 @@ where
     }
 }
 
-impl<T, S> StatefulFluentBuilder<T, S> {
+impl<T> FluentBuilder<T, Override>
+where
+    T: 'static,
+{
+    /**
+    Stack a fluent method on the builder.
+    
+    This will have the following behaviour depending on the current state of the builder:
+
+    - If there is no previous value, add the fluent method. This will be applied to a later-supplied default value.
+    - If there is a previous value, add the fluent method and remove that previous value.
+    - If there is a previous fluent method, that method will be replaced with the given one.
+
+    Each call to `fluent` will box the given closure.
+    */
+    pub fn fluent<F>(self, fluent_method: F) -> Self
+    where
+        F: FnOnce(T) -> T + 'static
+    {
+        FluentBuilder {
+            inner: self.inner.fluent((), fluent_method)
+        }
+    }
+
+    /**
+    Stack a fluent method on the builder.
+
+    This method behaves the same as `fluent`, but mutates the value instead of replacing it.
+    */
+    pub fn fluent_mut<F>(self, fluent_method: F) -> Self
+    where
+        F: FnOnce(&mut T) + 'static
+    {
+        FluentBuilder {
+            inner: self.inner.fluent_mut((), fluent_method)
+        }
+    }
+}
+
+impl<T, S, B> StatefulFluentBuilder<T, S, B> {
+    fn new(inner: StatefulFluentBuilderInner<T, S>) -> Self {
+        StatefulFluentBuilder {
+            inner: inner,
+            _marker: PhantomData,
+        }
+    }
+
     /**
     Create a new `StatefulFluentBuilder` from the given value.
     */
     pub fn from_value(value: T) -> Self {
-        StatefulFluentBuilder {
-            inner: StatefulFluentBuilderInner(State::Value(value), None),
-        }
+        StatefulFluentBuilder::new(StatefulFluentBuilderInner(State::Value(value), None))
     }
 
     /**
     Create a new `StatefulFluentBuilder` from the given seed.
     */
     pub fn from_seed(seed: S) -> Self {
-        StatefulFluentBuilder {
-            inner: StatefulFluentBuilderInner(State::Seed(seed), None),
-        }
+        StatefulFluentBuilder::new(StatefulFluentBuilderInner(State::Seed(seed), None))
     }
 
     /**
@@ -328,9 +431,7 @@ impl<T, S> StatefulFluentBuilder<T, S> {
     That means if the builder currently contains fluent methods then those methods will be discarded.
     */
     pub fn value(self, value: T) -> Self {
-        StatefulFluentBuilder {
-            inner: StatefulFluentBuilderInner(State::Value(value), None)
-        }
+        StatefulFluentBuilder::new(StatefulFluentBuilderInner(State::Value(value), None))
     }
 
     /**
@@ -364,7 +465,7 @@ impl<T, S> StatefulFluentBuilder<T, S> {
     }
 }
 
-impl<T, S> StatefulFluentBuilder<T, S>
+impl<T, S, B> StatefulFluentBuilder<T, S, B>
 where
     T: 'static,
     S: 'static,
@@ -378,9 +479,7 @@ where
     where
         F: FnOnce(T) -> T + 'static
     {
-        StatefulFluentBuilder {
-            inner: StatefulFluentBuilderInner(State::Seed(seed), Some(Box::new(fluent_method)))
-        }
+        StatefulFluentBuilder::new(StatefulFluentBuilderInner(State::Seed(seed), Some(Box::new(fluent_method))))
     }
 
     /**
@@ -397,7 +496,13 @@ where
             value
         })
     }
+}
 
+impl<T, S> StatefulFluentBuilder<T, S, Stack>
+where
+    T: 'static,
+    S: 'static,
+{
     /**
     Stack a fluent method on the builder.
     
@@ -424,9 +529,7 @@ where
             fluent_method(value, seed)
         });
 
-        StatefulFluentBuilder {
-            inner: StatefulFluentBuilderInner(state, Some(fluent_method)),
-        }
+        StatefulFluentBuilder::new(StatefulFluentBuilderInner(state, Some(fluent_method)))
     }
 
     /**
@@ -445,241 +548,509 @@ where
     }
 }
 
+impl<T, S> StatefulFluentBuilder<T, S, Override>
+where
+    T: 'static,
+    S: 'static,
+{
+    /**
+    Set the fluent method on the builder.
+    
+    This will have the following behaviour depending on the current state of the builder:
+
+    - If there is no previous value, add the fluent method. This will be applied to a later-supplied default value.
+    - If there is a previous value, add the fluent method and remove that previous value.
+    - If there is a previous fluent method, that method will be replaced with the given one.
+
+    Each call to `fluent` will box the given closure.
+    */
+    pub fn fluent<F>(self, seed: S, fluent_method: F) -> Self
+    where
+        F: FnOnce(T) -> T + 'static
+    {
+        StatefulFluentBuilder::from_fluent(seed, fluent_method)
+    }
+
+    /**
+    Set the fluent method on the builder.
+
+    This method behaves the same as `fluent`, but mutates the value instead of replacing it.
+    */
+    pub fn fluent_mut<F>(self, seed: S, fluent_method: F) -> Self
+    where
+        F: FnOnce(&mut T) + 'static
+    {
+        StatefulFluentBuilder::from_fluent_mut(seed, fluent_method)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     mod stateless {
-        use ::*;
+        mod fluent_override {
+            use ::*;
 
-        #[test]
-        fn default() {
-            let builder = FluentBuilder::<String>::default();
+            #[test]
+            fn default() {
+                let builder = FluentBuilder::<String>::default();
 
-            let result = builder.into_value(|| "default".to_owned());
+                let result = builder.into_value(|| "default".to_owned());
 
-            assert_eq!("default", result);
+                assert_eq!("default", result);
+            }
+
+            #[test]
+            fn default_value() {
+                let builder = FluentBuilder::<String>::default()
+                    .value("value".to_owned());
+
+                let result = builder.into_value(|| "default".to_owned());
+
+                assert_eq!("value", result);
+            }
+
+            #[test]
+            fn default_fluent() {
+                let builder = FluentBuilder::<String>::default()
+                    .fluent_mut(|v| v.push_str("_f1"))
+                    .fluent_mut(|v| v.push_str("_f2"));
+
+                let result = builder.into_value(|| "default".to_owned());
+
+                assert_eq!("default_f2", result);
+            }
+
+            #[test]
+            fn default_value_fluent() {
+                let builder = FluentBuilder::<String>::default()
+                    .value("value".to_owned())
+                    .fluent_mut(|v| v.push_str("_f1"))
+                    .fluent_mut(|v| v.push_str("_f2"));
+
+                let result = builder.into_value(|| "default".to_owned());
+
+                assert_eq!("default_f2", result);
+            }
+
+            #[test]
+            fn default_fluent_value() {
+                let builder = FluentBuilder::<String>::default()
+                    .fluent_mut(|v| v.push_str("_f1"))
+                    .fluent_mut(|v| v.push_str("_f2"))
+                    .value("value".to_owned());
+
+                let result = builder.into_value(|| "default".to_owned());
+
+                assert_eq!("value", result);
+            }
         }
 
-        #[test]
-        fn default_value() {
-            let builder = FluentBuilder::<String>::default()
-                .value("value".to_owned());
+        mod fluent_stack {
+            use ::*;
 
-            let result = builder.into_value(|| "default".to_owned());
+            #[test]
+            fn default() {
+                let builder = FluentBuilder::<String, Stack>::default();
 
-            assert_eq!("value", result);
-        }
+                let result = builder.into_value(|| "default".to_owned());
 
-        #[test]
-        fn default_fluent() {
-            let builder = FluentBuilder::<String>::default()
-                .fluent_mut(|v| v.push_str("_f1"))
-                .fluent_mut(|v| v.push_str("_f2"));
+                assert_eq!("default", result);
+            }
 
-            let result = builder.into_value(|| "default".to_owned());
+            #[test]
+            fn default_value() {
+                let builder = FluentBuilder::<String, Stack>::default()
+                    .value("value".to_owned());
 
-            assert_eq!("default_f1_f2", result);
-        }
+                let result = builder.into_value(|| "default".to_owned());
 
-        #[test]
-        fn default_value_fluent() {
-            let builder = FluentBuilder::<String>::default()
-                .value("value".to_owned())
-                .fluent_mut(|v| v.push_str("_f1"))
-                .fluent_mut(|v| v.push_str("_f2"));
+                assert_eq!("value", result);
+            }
 
-            let result = builder.into_value(|| "default".to_owned());
+            #[test]
+            fn default_fluent() {
+                let builder = FluentBuilder::<String, Stack>::default()
+                    .fluent_mut(|v| v.push_str("_f1"))
+                    .fluent_mut(|v| v.push_str("_f2"));
 
-            assert_eq!("value_f1_f2", result);
-        }
+                let result = builder.into_value(|| "default".to_owned());
 
-        #[test]
-        fn default_fluent_value() {
-            let builder = FluentBuilder::<String>::default()
-                .fluent_mut(|v| v.push_str("_f1"))
-                .fluent_mut(|v| v.push_str("_f2"))
-                .value("value".to_owned());
+                assert_eq!("default_f1_f2", result);
+            }
 
-            let result = builder.into_value(|| "default".to_owned());
+            #[test]
+            fn default_value_fluent() {
+                let builder = FluentBuilder::<String, Stack>::default()
+                    .value("value".to_owned())
+                    .fluent_mut(|v| v.push_str("_f1"))
+                    .fluent_mut(|v| v.push_str("_f2"));
 
-            assert_eq!("value", result);
+                let result = builder.into_value(|| "default".to_owned());
+
+                assert_eq!("value_f1_f2", result);
+            }
+
+            #[test]
+            fn default_fluent_value() {
+                let builder = FluentBuilder::<String, Stack>::default()
+                    .fluent_mut(|v| v.push_str("_f1"))
+                    .fluent_mut(|v| v.push_str("_f2"))
+                    .value("value".to_owned());
+
+                let result = builder.into_value(|| "default".to_owned());
+
+                assert_eq!("value", result);
+            }
         }
     }
 
     mod stateful {
-        use ::*;
+        mod fluent_override {
+            use ::*;
 
-        #[derive(Debug, PartialEq, Eq)]
-        struct Builder {
-            required: String,
-            optional: Option<String>,
-        }
+            #[derive(Debug, PartialEq, Eq)]
+            struct Builder {
+                required: String,
+                optional: Option<String>,
+            }
 
-        #[test]
-        fn from_seed() {
-            let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned());
+            #[test]
+            fn from_seed() {
+                let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned());
 
-            let result = builder.into_value(|seed| Builder {
-                required: seed,
-                optional: None
-            });
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
 
-            let expected = Builder {
-                required: "seed".to_owned(),
-                optional: None,
-            };
+                let expected = Builder {
+                    required: "seed".to_owned(),
+                    optional: None,
+                };
 
-            assert_eq!(expected, result);
-        }
+                assert_eq!(expected, result);
+            }
 
-        #[test]
-        fn from_fluent() {
-            let builder = StatefulFluentBuilder::<Builder, String>::from_fluent_mut("seed".to_owned(), |v| {
-                v.optional = Some("fluent".to_owned())
-            });
+            #[test]
+            fn from_fluent() {
+                let builder = StatefulFluentBuilder::<Builder, String>::from_fluent_mut("seed".to_owned(), |v| {
+                    v.optional = Some("fluent".to_owned())
+                });
 
-            let result = builder.into_value(|seed| Builder {
-                required: seed,
-                optional: None
-            });
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
 
-            let expected = Builder {
-                required: "seed".to_owned(),
-                optional: Some("fluent".to_owned()),
-            };
+                let expected = Builder {
+                    required: "seed".to_owned(),
+                    optional: Some("fluent".to_owned()),
+                };
 
-            assert_eq!(expected, result);
-        }
+                assert_eq!(expected, result);
+            }
 
-        #[test]
-        fn from_value() {
-            let builder = StatefulFluentBuilder::<Builder, String>::from_value(Builder {
-                required: "seed".to_owned(),
-                optional: None,
-            });
+            #[test]
+            fn from_value() {
+                let builder = StatefulFluentBuilder::<Builder, String>::from_value(Builder {
+                    required: "seed".to_owned(),
+                    optional: None,
+                });
 
-            let result = builder.into_value(|seed| Builder {
-                required: seed,
-                optional: None
-            });
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
 
-            let expected = Builder {
-                required: "seed".to_owned(),
-                optional: None,
-            };
+                let expected = Builder {
+                    required: "seed".to_owned(),
+                    optional: None,
+                };
 
-            assert_eq!(expected, result);
-        }
+                assert_eq!(expected, result);
+            }
 
-        #[test]
-        fn from_seed_value() {
-            let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
-                .value(Builder {
+            #[test]
+            fn from_seed_value() {
+                let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
+                    .value(Builder {
+                        required: "value".to_owned(),
+                        optional: Some("value".to_owned())
+                    });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
                     required: "value".to_owned(),
-                    optional: Some("value".to_owned())
+                    optional: Some("value".to_owned()),
+                };
+
+                assert_eq!(expected, result);
+            }
+
+            #[test]
+            fn from_seed_fluent() {
+                let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
+                    .fluent_mut("f1".to_owned(), |v| {
+                        v.optional = Some("f1".to_owned())
+                    })
+                    .fluent_mut("f2".to_owned(), |v| {
+                        v.optional = Some("f2".to_owned())
+                    });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
                 });
 
-            let result = builder.into_value(|seed| Builder {
-                required: seed,
-                optional: None
-            });
+                let expected = Builder {
+                    required: "f2".to_owned(),
+                    optional: Some("f2".to_owned()),
+                };
 
-            let expected = Builder {
-                required: "value".to_owned(),
-                optional: Some("value".to_owned()),
-            };
+                assert_eq!(expected, result);
+            }
 
-            assert_eq!(expected, result);
-        }
+            #[test]
+            fn from_seed_value_fluent() {
+                let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
+                    .value(Builder {
+                        required: "value".to_owned(),
+                        optional: Some("value".to_owned())
+                    })
+                    .fluent_mut("f1".to_owned(), |v| {
+                        if let Some(ref mut optional) = v.optional.as_mut() {
+                            optional.push_str("_f1");
+                        }
+                    })
+                    .fluent_mut("f2".to_owned(), |v| {
+                        if let Some(ref mut optional) = v.optional.as_mut() {
+                            optional.push_str("_f2");
+                        }
+                    });
 
-        #[test]
-        fn from_seed_fluent() {
-            let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
-                .fluent_mut("f1".to_owned(), |v, s| {
-                    v.required = s;
-                    v.optional = Some("f1".to_owned())
-                })
-                .fluent_mut("f2".to_owned(), |v, s| {
-                    v.required = s;
-                    if let Some(ref mut optional) = v.optional.as_mut() {
-                        optional.push_str("_f2");
-                    }
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
                 });
 
-            let result = builder.into_value(|seed| Builder {
-                required: seed,
-                optional: None
-            });
+                let expected = Builder {
+                    required: "f2".to_owned(),
+                    optional: None,
+                };
 
-            let expected = Builder {
-                required: "f2".to_owned(),
-                optional: Some("f1_f2".to_owned()),
-            };
+                assert_eq!(expected, result);
+            }
 
-            assert_eq!(expected, result);
-        }
+            #[test]
+            fn from_seed_fluent_value() {
+                let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
+                    .fluent_mut("f1".to_owned(), |v| {
+                        v.optional = Some("f1".to_owned())
+                    })
+                    .fluent_mut("f2".to_owned(), |v| {
+                        if let Some(ref mut optional) = v.optional.as_mut() {
+                            optional.push_str("_f2");
+                        }
+                    })
+                    .value(Builder {
+                        required: "value".to_owned(),
+                        optional: Some("value".to_owned())
+                    });
 
-        #[test]
-        fn from_seed_value_fluent() {
-            let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
-                .value(Builder {
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
                     required: "value".to_owned(),
-                    optional: Some("value".to_owned())
-                })
-                .fluent_mut("f1".to_owned(), |v, s| {
-                    v.required = s;
-                    if let Some(ref mut optional) = v.optional.as_mut() {
-                        optional.push_str("_f1");
-                    }
-                })
-                .fluent_mut("f2".to_owned(), |v, s| {
-                    v.required = s;
-                    if let Some(ref mut optional) = v.optional.as_mut() {
-                        optional.push_str("_f2");
-                    }
-                });
+                    optional: Some("value".to_owned()),
+                };
 
-            let result = builder.into_value(|seed| Builder {
-                required: seed,
-                optional: None
-            });
-
-            let expected = Builder {
-                required: "f2".to_owned(),
-                optional: Some("value_f1_f2".to_owned()),
-            };
-
-            assert_eq!(expected, result);
+                assert_eq!(expected, result);
+            }
         }
 
-        #[test]
-        fn from_seed_fluent_value() {
-            let builder = StatefulFluentBuilder::<Builder, String>::from_seed("seed".to_owned())
-                .fluent_mut("f1".to_owned(), |v, s| {
-                    v.required = s;
-                    v.optional = Some("f1".to_owned())
-                })
-                .fluent_mut("f2".to_owned(), |v, s| {
-                    v.required = s;
-                    if let Some(ref mut optional) = v.optional.as_mut() {
-                        optional.push_str("_f2");
-                    }
-                })
-                .value(Builder {
-                    required: "value".to_owned(),
-                    optional: Some("value".to_owned())
+        mod fluent_stack {
+            use ::*;
+
+            #[derive(Debug, PartialEq, Eq)]
+            struct Builder {
+                required: String,
+                optional: Option<String>,
+            }
+
+            #[test]
+            fn from_seed() {
+                let builder = StatefulFluentBuilder::<Builder, String, Stack>::from_seed("seed".to_owned());
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
                 });
 
-            let result = builder.into_value(|seed| Builder {
-                required: seed,
-                optional: None
-            });
+                let expected = Builder {
+                    required: "seed".to_owned(),
+                    optional: None,
+                };
 
-            let expected = Builder {
-                required: "value".to_owned(),
-                optional: Some("value".to_owned()),
-            };
+                assert_eq!(expected, result);
+            }
 
-            assert_eq!(expected, result);
+            #[test]
+            fn from_fluent() {
+                let builder = StatefulFluentBuilder::<Builder, String, Stack>::from_fluent_mut("seed".to_owned(), |v| {
+                    v.optional = Some("fluent".to_owned())
+                });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
+                    required: "seed".to_owned(),
+                    optional: Some("fluent".to_owned()),
+                };
+
+                assert_eq!(expected, result);
+            }
+
+            #[test]
+            fn from_value() {
+                let builder = StatefulFluentBuilder::<Builder, String, Stack>::from_value(Builder {
+                    required: "seed".to_owned(),
+                    optional: None,
+                });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
+                    required: "seed".to_owned(),
+                    optional: None,
+                };
+
+                assert_eq!(expected, result);
+            }
+
+            #[test]
+            fn from_seed_value() {
+                let builder = StatefulFluentBuilder::<Builder, String, Stack>::from_seed("seed".to_owned())
+                    .value(Builder {
+                        required: "value".to_owned(),
+                        optional: Some("value".to_owned())
+                    });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
+                    required: "value".to_owned(),
+                    optional: Some("value".to_owned()),
+                };
+
+                assert_eq!(expected, result);
+            }
+
+            #[test]
+            fn from_seed_fluent() {
+                let builder = StatefulFluentBuilder::<Builder, String, Stack>::from_seed("seed".to_owned())
+                    .fluent_mut("f1".to_owned(), |v, s| {
+                        v.required = s;
+                        v.optional = Some("f1".to_owned())
+                    })
+                    .fluent_mut("f2".to_owned(), |v, s| {
+                        v.required = s;
+                        if let Some(ref mut optional) = v.optional.as_mut() {
+                            optional.push_str("_f2");
+                        }
+                    });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
+                    required: "f2".to_owned(),
+                    optional: Some("f1_f2".to_owned()),
+                };
+
+                assert_eq!(expected, result);
+            }
+
+            #[test]
+            fn from_seed_value_fluent() {
+                let builder = StatefulFluentBuilder::<Builder, String, Stack>::from_seed("seed".to_owned())
+                    .value(Builder {
+                        required: "value".to_owned(),
+                        optional: Some("value".to_owned())
+                    })
+                    .fluent_mut("f1".to_owned(), |v, s| {
+                        v.required = s;
+                        if let Some(ref mut optional) = v.optional.as_mut() {
+                            optional.push_str("_f1");
+                        }
+                    })
+                    .fluent_mut("f2".to_owned(), |v, s| {
+                        v.required = s;
+                        if let Some(ref mut optional) = v.optional.as_mut() {
+                            optional.push_str("_f2");
+                        }
+                    });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
+                    required: "f2".to_owned(),
+                    optional: Some("value_f1_f2".to_owned()),
+                };
+
+                assert_eq!(expected, result);
+            }
+
+            #[test]
+            fn from_seed_fluent_value() {
+                let builder = StatefulFluentBuilder::<Builder, String, Stack>::from_seed("seed".to_owned())
+                    .fluent_mut("f1".to_owned(), |v, s| {
+                        v.required = s;
+                        v.optional = Some("f1".to_owned())
+                    })
+                    .fluent_mut("f2".to_owned(), |v, s| {
+                        v.required = s;
+                        if let Some(ref mut optional) = v.optional.as_mut() {
+                            optional.push_str("_f2");
+                        }
+                    })
+                    .value(Builder {
+                        required: "value".to_owned(),
+                        optional: Some("value".to_owned())
+                    });
+
+                let result = builder.into_value(|seed| Builder {
+                    required: seed,
+                    optional: None
+                });
+
+                let expected = Builder {
+                    required: "value".to_owned(),
+                    optional: Some("value".to_owned()),
+                };
+
+                assert_eq!(expected, result);
+            }
         }
     }
 }
