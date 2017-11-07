@@ -79,8 +79,6 @@ impl<TValue, TFluent> FluentBuilder<TValue, Stack, TFluent> where TFluent: Fluen
     - no previous value, add the fluent method. This will be applied to a later-supplied default value.
     - a previous value, add the fluent method and retain that previous value.
     - a previous fluent method, stack this method on top and retain any previous value.
-
-    Each call to `fluent` will box the given closure.
     */
     pub fn fluent<TNextFluent>(self, fluent_method: TNextFluent) -> FluentBuilder<TValue, Stack, Apply<TValue, TFluent, ByValue<TNextFluent>>>
     where
@@ -287,8 +285,6 @@ where
     - no previous value, add the fluent method. This will be applied to a later-supplied default value.
     - a previous value, add the fluent method and retain that previous value.
     - a previous fluent method, stack this method on top and retain any previous value.
-
-    Each call to `fluent` will box the given closure.
     */
     pub fn fluent<TNewFluent>(self, seed: TSeed, fluent_method: TNewFluent) -> StatefulFluentBuilder<TValue, TSeed, Stack, StatefulApply<TValue, TSeed, TFluent, ByValue<TNewFluent>>>
     where
@@ -322,8 +318,6 @@ where
     - no previous value, add the fluent method. This will be applied to a later-supplied default value.
     - a previous value, add the fluent method and remove that previous value.
     - a previous fluent method, that method will be replaced with the given one.
-
-    Each call to `fluent` will box the given closure.
     */
     pub fn fluent<TNewFluent>(self, seed: TSeed, fluent_method: TNewFluent) -> StatefulFluentBuilder<TValue, TSeed, Override, Apply<TValue, BoxedFluent<TValue>, ByValue<TNewFluent>>>
     where
