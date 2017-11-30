@@ -230,4 +230,4 @@ There's nothing really special about the above builders besides the use of `Flue
 
 mod imp;
 
-pub use self::imp::{FluentBuilder, StatefulFluentBuilder, BoxedFluent, Stack, Override};
+pub use self::imp::{FluentBuilder, StatefulFluentBuilder, BoxedFluent, Stack, Override, TryIntoValue};

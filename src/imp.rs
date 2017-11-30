@@ -32,6 +32,18 @@ A boxed fluent method.
 */
 pub struct BoxedFluent<TValue>(Box<Fluent<TValue>>);
 
+/**
+The result of attempting to pull a value out of a builder.
+
+Calling `try_into_value` will return `TryIntoValue::Value` if the builder has been given an explicit value.
+It will return `TryIntoValue::Builder` with the original builder if it hasn't been given an explicit value.
+Calling `into_value` will never fail, because if a value is missing it's constructed from the default function.
+*/
+pub enum TryIntoValue<TValue, TBuilder> {
+    Value(TValue),
+    Builder(TBuilder),
+}
+
 struct StatefulFluentBuilderInner<TValue, TSeed, TFluent>(State<TValue, TSeed>, Option<TFluent>);
 
 enum State<TValue, TSeed> {
@@ -82,7 +94,7 @@ impl<TValue, TFluent> FluentBuilder<TValue, Stack, TFluent> where TFluent: Fluen
     */
     pub fn fluent<TNextFluent>(self, fluent_method: TNextFluent) -> FluentBuilder<TValue, Stack, Apply<TValue, TFluent, ByValue<TNextFluent>>>
     where
-        TNextFluent: Fn(TValue) -> TValue
+        TNextFluent: FnOnce(TValue) -> TValue
     {
         FluentBuilder {
             inner: self.inner.stack(|previous_fluent_method| Apply::new(previous_fluent_method, ByValue(fluent_method)))
@@ -96,7 +108,7 @@ impl<TValue, TFluent> FluentBuilder<TValue, Stack, TFluent> where TFluent: Fluen
     */
     pub fn fluent_mut<TNextFluent>(self, fluent_method: TNextFluent) -> FluentBuilder<TValue, Stack, Apply<TValue, TFluent, ByRefMut<TNextFluent>>>
     where
-        TNextFluent: Fn(&mut TValue)
+        TNextFluent: FnOnce(&mut TValue)
     {
         FluentBuilder {
             inner: self.inner.stack(|previous_fluent_method| Apply::new(previous_fluent_method, ByRefMut(fluent_method)))
@@ -110,7 +122,7 @@ impl<TValue, TFluent> FluentBuilder<TValue, Override, TFluent> where TFluent: Fl
     */
     pub fn fluent<TNextFluent>(self, fluent_method: TNextFluent) -> FluentBuilder<TValue, Override, Apply<TValue, BoxedFluent<TValue>, ByValue<TNextFluent>>>
     where
-        TNextFluent: Fn(TValue) -> TValue + 'static
+        TNextFluent: FnOnce(TValue) -> TValue + 'static
     {
         FluentBuilder {
             inner: self.inner.fluent((), fluent_method)
@@ -124,7 +136,7 @@ impl<TValue, TFluent> FluentBuilder<TValue, Override, TFluent> where TFluent: Fl
     */
     pub fn fluent_mut<TNextFluent>(self, fluent_method: TNextFluent) -> FluentBuilder<TValue, Override, Apply<TValue, BoxedFluent<TValue>, ByRefMut<TNextFluent>>>
     where
-        TNextFluent: Fn(&mut TValue) + 'static
+        TNextFluent: FnOnce(&mut TValue) + 'static
     {
         FluentBuilder {
             inner: self.inner.fluent_mut((), fluent_method)
@@ -146,9 +158,42 @@ impl<TValue, TStack, TFluent> FluentBuilder<TValue, TStack, TFluent> where TFlue
     */
     pub fn into_value<TDefault>(self, default_value: TDefault) -> TValue
     where
-        TDefault: Fn() -> TValue + 'static,
+        TDefault: FnOnce() -> TValue + 'static,
     {
         self.inner.into_value(move |_| default_value())
+    }
+
+    /**
+    Attempt to take a value from the builder.
+
+    If the builder doesn't contain a concrete value then it is returned in the `Builder` variant.
+
+    # Examples
+
+    ```
+    # use fluent_builder::{Stack, FluentBuilder, TryIntoValue};
+    let builder = FluentBuilder::<String, Stack>::new()
+        .value("A value".to_owned())
+        .fluent_mut(|mut s| s.push_str(" and more"));
+
+    match builder.try_into_value() {
+        TryIntoValue::Value(value) => {
+            // The builder has a value that we can use
+            assert_eq!("A value and more", value);
+        },
+        TryIntoValue::Builder(builder) => {
+            // The builder doesn't have a value but we can still use it
+            let value = builder.into_value(|| String::new());
+    #       panic!("expected value");
+        }
+    }
+    ```
+    */
+    pub fn try_into_value(self) -> TryIntoValue<TValue, Self> {
+        match self.inner.try_into_value() {
+            TryIntoValue::Builder(inner) => TryIntoValue::Builder(FluentBuilder { inner }),
+            TryIntoValue::Value(value) => TryIntoValue::Value(value)
+        }
     }
 }
 
@@ -206,7 +251,7 @@ impl<TValue, TSeed, TStack> StatefulFluentBuilder<TValue, TSeed, TStack, BoxedFl
     */
     pub fn from_fluent<TFluent>(seed: TSeed, fluent_method: TFluent) -> StatefulFluentBuilder<TValue, TSeed, TStack, Apply<TValue, BoxedFluent<TValue>, ByValue<TFluent>>>
     where
-        TFluent: Fn(TValue) -> TValue
+        TFluent: FnOnce(TValue) -> TValue
     {
         let fluent_method = Apply::new(None, ByValue(fluent_method));
         StatefulFluentBuilder::new(StatefulFluentBuilderInner(State::Seed(seed), Some(fluent_method)))
@@ -219,7 +264,7 @@ impl<TValue, TSeed, TStack> StatefulFluentBuilder<TValue, TSeed, TStack, BoxedFl
     */
     pub fn from_fluent_mut<TFluent>(seed: TSeed, fluent_method: TFluent) -> StatefulFluentBuilder<TValue, TSeed, TStack, Apply<TValue, BoxedFluent<TValue>, ByRefMut<TFluent>>>
     where
-        TFluent: Fn(&mut TValue)
+        TFluent: FnOnce(&mut TValue)
     {
         let fluent_method = Apply::new(None, ByRefMut(fluent_method));
         StatefulFluentBuilder::new(StatefulFluentBuilderInner(State::Seed(seed), Some(fluent_method)))
@@ -243,7 +288,7 @@ where
     */
     pub fn into_value<TDefault>(self, default_value: TDefault) -> TValue
     where
-        TDefault: Fn(TSeed) -> TValue + 'static,
+        TDefault: FnOnce(TSeed) -> TValue + 'static,
     {
         let StatefulFluentBuilderInner(state, mut fluent_method) = self.inner;
 
@@ -252,12 +297,47 @@ where
             State::Seed(seed) => default_value(seed)
         };
 
-        let value = match fluent_method {
+        match fluent_method {
             Some(ref mut fluent_method) => fluent_method.apply(default),
             None => default,
-        };
+        }
+    }
 
-        value
+    /**
+    Attempt to take a value from the builder.
+
+    If the builder doesn't contain a concrete value then it is returned in the `Builder` variant.
+
+    # Examples
+
+    ```
+    # use fluent_builder::{Stack, StatefulFluentBuilder, TryIntoValue};
+    let builder = StatefulFluentBuilder::<String, i32, Stack>::from_value("A value".to_owned())
+        .fluent(1, |s, i| format!("{} and more {}", s, i));
+
+    match builder.try_into_value() {
+        TryIntoValue::Value(value) => {
+            // The builder has a value that we can use
+            assert_eq!("A value and more 1", value);
+        },
+        TryIntoValue::Builder(builder) => {
+            // The builder doesn't have a value but we can still use it
+            let value = builder.into_value(|i| i.to_string());
+    #       panic!("expected value");
+        }
+    }
+    ```
+    */
+    pub fn try_into_value(self) -> TryIntoValue<TValue, Self> {
+        match self.inner {
+            StatefulFluentBuilderInner(State::Value(value), mut fluent_method) => {
+                TryIntoValue::Value(match fluent_method {
+                    Some(ref mut fluent_method) => fluent_method.apply(value),
+                    None => value,
+                })
+            },
+            inner => TryIntoValue::Builder(StatefulFluentBuilder::new(inner))
+        }
     }
 }
 
@@ -288,7 +368,7 @@ where
     */
     pub fn fluent<TNewFluent>(self, seed: TSeed, fluent_method: TNewFluent) -> StatefulFluentBuilder<TValue, TSeed, Stack, StatefulApply<TValue, TSeed, TFluent, ByValue<TNewFluent>>>
     where
-        TNewFluent: Fn(TValue, TSeed) -> TValue
+        TNewFluent: FnOnce(TValue, TSeed) -> TValue
     {
         self.stack(move |previous_fluent_method| StatefulApply::new(seed, previous_fluent_method, ByValue(fluent_method)))
     }
@@ -300,7 +380,7 @@ where
     */
     pub fn fluent_mut<TNewFluent>(self, seed: TSeed, fluent_method: TNewFluent) -> StatefulFluentBuilder<TValue, TSeed, Stack, StatefulApply<TValue, TSeed, TFluent, ByRefMut<TNewFluent>>>
     where
-        TNewFluent: Fn(&mut TValue, TSeed)
+        TNewFluent: FnOnce(&mut TValue, TSeed)
     {
         self.stack(move |previous_fluent_method| StatefulApply::new(seed, previous_fluent_method, ByRefMut(fluent_method)))
     }
@@ -321,7 +401,7 @@ where
     */
     pub fn fluent<TNewFluent>(self, seed: TSeed, fluent_method: TNewFluent) -> StatefulFluentBuilder<TValue, TSeed, Override, Apply<TValue, BoxedFluent<TValue>, ByValue<TNewFluent>>>
     where
-        TNewFluent: Fn(TValue) -> TValue + 'static
+        TNewFluent: FnOnce(TValue) -> TValue + 'static
     {
         StatefulFluentBuilder::from_fluent(seed, fluent_method)
     }
@@ -333,7 +413,7 @@ where
     */
     pub fn fluent_mut<TNewFluent>(self, seed: TSeed, fluent_method: TNewFluent) -> StatefulFluentBuilder<TValue, TSeed, Override, Apply<TValue, BoxedFluent<TValue>, ByRefMut<TNewFluent>>>
     where
-        TNewFluent: Fn(&mut TValue) + 'static
+        TNewFluent: FnOnce(&mut TValue) + 'static
     {
         StatefulFluentBuilder::from_fluent_mut(seed, fluent_method)
     }
@@ -397,37 +477,43 @@ impl<TValue, TPreviousFluent, TNextFluent> Apply<TValue, TPreviousFluent, TNextF
 impl<TValue, TPreviousFluent, TNextFluent> Fluent<TValue> for Apply<TValue, TPreviousFluent, ByValue<TNextFluent>>
 where
     TPreviousFluent: Fluent<TValue>,
-    TNextFluent: FnMut(TValue) -> TValue
+    TNextFluent: FnOnce(TValue) -> TValue
 {
     fn apply(&mut self, value: TValue) -> TValue {
+        // TODO: Remove this once Rust 1.23 is released
+        fn fn_once<F, TValue, TSeed>(f: F) -> F where F: FnOnce(TValue, TSeed) -> TValue { f }
+
         use std::mem;
         let inner = mem::replace(&mut self.inner, None).expect("attempted to re-use builder");
 
-        let (mut next, inner) = inner.take_next();
+        let (next, inner) = inner.take_next();
 
-        inner.set_next(ByValue(move |value: TValue, _| (next.0)(value))).apply(value)
+        inner.set_next(ByValue(fn_once(move |value: TValue, _| (next.0)(value)))).apply(value)
     }
 }
 
 impl<TValue, TPreviousFluent, TNextFluent> Fluent<TValue> for Apply<TValue, TPreviousFluent, ByRefMut<TNextFluent>>
 where
     TPreviousFluent: Fluent<TValue>,
-    TNextFluent: FnMut(&mut TValue)
+    TNextFluent: FnOnce(&mut TValue)
 {
     fn apply(&mut self, value: TValue) -> TValue {
+        // TODO: Remove this once Rust 1.23 is released
+        fn fn_once<F, TValue, TSeed>(f: F) -> F where F: FnOnce(&mut TValue, TSeed) { f }
+
         use std::mem;
         let inner = mem::replace(&mut self.inner, None).expect("attempted to re-use builder");
 
-        let (mut next, inner) = inner.take_next();
+        let (next, inner) = inner.take_next();
 
-        inner.set_next(ByRefMut(move |mut value: &mut TValue, _| (next.0)(&mut value))).apply(value)
+        inner.set_next(ByRefMut(fn_once(move |mut value: &mut TValue, _| (next.0)(&mut value)))).apply(value)
     }
 }
 
 pub struct StatefulApply<TValue, TSeed, TPreviousFluent, TNextFluent> {
     seed: Option<TSeed>,
     previous: Option<TPreviousFluent>,
-    next: TNextFluent,
+    next: Option<TNextFluent>,
     _marker: PhantomData<TValue>,
 }
 
@@ -436,17 +522,17 @@ impl<TValue, TSeed, TPreviousFluent, TNextFluent> StatefulApply<TValue, TSeed, T
         StatefulApply {
             seed: Some(seed),
             previous: previous,
-            next: next,
+            next: Some(next),
             _marker: PhantomData,
         }
     }
 
     fn take_next(self) -> (TNextFluent, StatefulApply<TValue, TSeed, TPreviousFluent, ()>) {
-        let next = self.next;
+        let next = self.next.expect("attempted to re-use builder");
         let self_sans_next = StatefulApply {
             seed: self.seed,
             previous: self.previous,
-            next: (),
+            next: Some(()),
             _marker: PhantomData,
         };
 
@@ -457,7 +543,7 @@ impl<TValue, TSeed, TPreviousFluent, TNextFluent> StatefulApply<TValue, TSeed, T
         StatefulApply {
             seed: self.seed,
             previous: self.previous,
-            next: next,
+            next: Some(next),
             _marker: PhantomData,
         }
     }
@@ -466,36 +552,38 @@ impl<TValue, TSeed, TPreviousFluent, TNextFluent> StatefulApply<TValue, TSeed, T
 impl<TValue, TSeed, TPreviousFluent, TNextFluent> Fluent<TValue> for StatefulApply<TValue, TSeed, TPreviousFluent, ByValue<TNextFluent>>
 where
     TPreviousFluent: Fluent<TValue>,
-    TNextFluent: FnMut(TValue, TSeed) -> TValue
+    TNextFluent: FnOnce(TValue, TSeed) -> TValue
 {
     fn apply(&mut self, value: TValue) -> TValue {
         use std::mem;
         let seed = mem::replace(&mut self.seed, None).expect("attempted to re-use builder");
+        let next = mem::replace(&mut self.next, None).expect("attempted to re-use builder");
 
         let value = match self.previous {
             Some(ref mut previous) => previous.apply(value),
             None => value
         };
 
-        (self.next.0)(value, seed)
+        (next.0)(value, seed)
     }
 }
 
 impl<TValue, TSeed, TPreviousFluent, TNextFluent> Fluent<TValue> for StatefulApply<TValue, TSeed, TPreviousFluent, ByRefMut<TNextFluent>>
 where
     TPreviousFluent: Fluent<TValue>,
-    TNextFluent: FnMut(&mut TValue, TSeed)
+    TNextFluent: FnOnce(&mut TValue, TSeed)
 {
     fn apply(&mut self, value: TValue) -> TValue {
         use std::mem;
         let seed = mem::replace(&mut self.seed, None).expect("attempted to re-use builder");
+        let next = mem::replace(&mut self.next, None).expect("attempted to re-use builder");
 
         let mut value = match self.previous {
             Some(ref mut previous) => previous.apply(value),
             None => value
         };
 
-        (self.next.0)(&mut value, seed);
+        (next.0)(&mut value, seed);
         value
     }
 }
@@ -546,6 +634,19 @@ mod tests {
                 let result = builder.into_value(|| "default".to_owned());
 
                 assert_eq!("default_f2", result);
+            }
+
+            #[test]
+            fn value_take() {
+                let builder = FluentBuilder::<String>::default()
+                    .value("value".to_owned());
+
+                let result = match builder.try_into_value() {
+                    TryIntoValue::Value(value) => value,
+                    _ => panic!("expected `TryIntoValue::Value`")
+                };
+
+                assert_eq!("value", result);
             }
 
             #[test]
@@ -616,6 +717,21 @@ mod tests {
                 let result = builder.into_value(|| "default".to_owned());
 
                 assert_eq!("value", result);
+            }
+
+            #[test]
+            fn value_fluent_take() {
+                let builder = FluentBuilder::<String, Stack>::default()
+                    .value("value".to_owned())
+                    .fluent_mut(|v| v.push_str("_f1"))
+                    .fluent_mut(|v| v.push_str("_f2"));
+
+                let result = match builder.try_into_value() {
+                    TryIntoValue::Value(value) => value,
+                    _ => panic!("expected `TryIntoValue::Value`")
+                };
+
+                assert_eq!("value_f1_f2", result);
             }
         }
     }
