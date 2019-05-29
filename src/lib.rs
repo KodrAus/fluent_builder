@@ -77,7 +77,7 @@ struct Builder {
     optional: Option<String>,
 }
 
-let value = StatefulFluentBuilder::<Builder, String>::from_seed("A required value".to_owned())
+let value = StatefulFluentBuilder::<String, Builder>::from_seed("A required value".to_owned())
     .fluent_mut("A required value".to_owned(), |b| {
         if let Some(ref mut optional) = b.optional.as_mut() {
             optional.push_str(" fluent1");
@@ -103,14 +103,14 @@ The API requires each invocation of `fluent` deals with the required state:
 # }
 use fluent_builder::{StatefulFluentBuilder, Stack};
 
-let value = StatefulFluentBuilder::<Builder, String, Stack>::from_seed("A required value".to_owned())
-    .fluent_mut("A required value".to_owned(), |b, s| {
+let value = StatefulFluentBuilder::<String, Builder, Stack>::from_seed("A required value".to_owned())
+    .fluent_mut("A required value".to_owned(), |s, b| {
         b.required = s;
         if let Some(ref mut optional) = b.optional.as_mut() {
             optional.push_str(" fluent1");
         }
     })
-    .fluent_mut("A required value".to_owned(), |b, s| {
+    .fluent_mut("A required value".to_owned(), |s, b| {
         b.required = s;
         if let Some(ref mut optional) = b.optional.as_mut() {
             optional.push_str(" fluent2");
@@ -131,12 +131,12 @@ The `FluentBuilder` and `StatefulFluentBuilder` types are designed to be used wi
 They just provide some consistent underlying behaviour with respect to assigning and mutating inner builders:
 
 ```rust
-use fluent_builder::{FluentBuilder, Stack};
+use fluent_builder::{BoxedFluentBuilder, Stack};
 
 #[derive(Default)]
 struct RequestBuilder {
     // Use a `FluentBuilder` to manage the inner `BodyBuilder`
-    body: FluentBuilder<BodyBuilder, Stack>,
+    body: BoxedFluentBuilder<BodyBuilder, Stack>,
 }
 
 #[derive(Default)]
@@ -164,7 +164,7 @@ struct Body(Vec<u8>);
 impl RequestBuilder {
     fn new() -> Self {
         RequestBuilder {
-            body: FluentBuilder::default(),
+            body: BoxedFluentBuilder::default(),
         }
     }
 
@@ -230,4 +230,8 @@ There's nothing really special about the above builders besides the use of `Flue
 
 mod imp;
 
-pub use self::imp::{FluentBuilder, StatefulFluentBuilder, BoxedFluent, Stack, Override, TryIntoValue};
+pub use self::imp::{
+    Boxed, BoxedFluentBuilder, BoxedStatefulFluentBuilder, DefaultStack, DefaultStorage,
+    FluentBuilder, Inline, Override, Shared, SharedFluentBuilder, SharedStatefulFluentBuilder,
+    Stack, StatefulFluentBuilder, TryIntoValue,
+};
